@@ -62,6 +62,49 @@ class Tests: XCTestCase {
         let res = deepEqualDict(dic, modelDic!)
         XCTAssertTrue(res)
     }
+
+    func testSmartSubclassDecodeEncodeKeepsInheritedAndSubclassFields() {
+        let dict: [String: Any] = [
+            "name": "Linus",
+            "age": 35
+        ]
+
+        guard let model = SubModel.deserialize(from: dict) else {
+            XCTFail("SubModel 反序列化失败")
+            return
+        }
+
+        XCTAssertEqual(model.name, "Linus")
+        XCTAssertEqual(model.age, 35)
+
+        let encoded = model.toDictionary()
+        XCTAssertEqual(encoded?["name"] as? String, "Linus")
+        XCTAssertEqual(encoded?["age"] as? Int, 35)
+    }
+
+    func testSmartSubclassSkipsLazyPropertyDuringDecodeAndEncode() {
+        let dict: [String: Any] = [
+            "name": "Ada",
+            "age": 22,
+            "desc": "should-be-ignored"
+        ]
+
+        guard let model = SubModel.deserialize(from: dict) else {
+            XCTFail("SubModel 反序列化失败")
+            return
+        }
+
+        XCTAssertEqual(model.desc, "我的名字是Ada")
+
+        let encoded = model.toDictionary()
+        XCTAssertNil(encoded?["desc"])
+    }
+
+    func testSmartSubclassGeneratesRequiredInit() {
+        let model = SubModel()
+        XCTAssertEqual(model.name, "")
+        XCTAssertEqual(model.age, 0)
+    }
 }
 
 

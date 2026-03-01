@@ -2,6 +2,20 @@
 import CompilerPluginSupport
 import PackageDescription
 
+#if compiler(>=6.3)
+let swiftSyntaxVersion: Version = "603.0.0"
+#elseif compiler(>=6.2)
+let swiftSyntaxVersion: Version = "602.0.0"
+#elseif compiler(>=6.1)
+let swiftSyntaxVersion: Version = "601.0.0"
+#elseif compiler(>=6.0)
+let swiftSyntaxVersion: Version = "600.0.0"
+#elseif compiler(>=5.10)
+let swiftSyntaxVersion: Version = "510.0.0"
+#else
+let swiftSyntaxVersion: Version = "509.0.0"
+#endif
+
 let package = Package(
     name: "SmartCodable",
     platforms: [.macOS(.v10_15), .iOS(.v13), .tvOS(.v13), .watchOS(.v6), .macCatalyst(.v13), .visionOS(.v1)],
@@ -17,8 +31,10 @@ let package = Package(
         )
     ],
     dependencies: [
-        // Depend on the latest Swift 5.9 SwiftSyntax
-        .package(url: "https://github.com/swiftlang/swift-syntax", "600.0.0"..<"700.0.0")
+        // SwiftSyntax major versions track Swift compiler versions (e.g. 602.x for Swift 6.2).
+        // Pick the matching range so SwiftPM doesn't pull a prebuilt macro support module from a
+        // different compiler version (which fails to import).
+        .package(url: "https://github.com/swiftlang/swift-syntax", from: swiftSyntaxVersion)
     ],
     targets: [
         // Targets are the basic building blocks of a package, defining a module or a test suite.
