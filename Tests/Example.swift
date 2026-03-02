@@ -63,6 +63,9 @@ class Tests: XCTestCase {
         XCTAssertTrue(res)
     }
 
+    /// Verifies @SmartSubclass macro generates init(from:)/encode(to:) that preserve both
+    /// inherited (name) and subclass (age) properties by calling super methods correctly.
+    /// Tests Issue #128 fix: if SwiftSyntax modules fail to load, macro expansion breaks.
     func testSmartSubclassDecodeEncodeKeepsInheritedAndSubclassFields() {
         let dict: [String: Any] = [
             "name": "Linus",
@@ -82,6 +85,10 @@ class Tests: XCTestCase {
         XCTAssertEqual(encoded?["age"] as? Int, 35)
     }
 
+    /// Verifies @SmartSubclass correctly excludes lazy properties from Codable synthesis.
+    /// Lazy properties must use their initializer closure, not JSON data — decoding into them
+    /// would bypass deferred initialization semantics. The macro detects `lazy var` modifiers
+    /// and omits them from CodingKeys/init(from:)/encode(to:) (SmartSubclassMacro.swift:88-91).
     func testSmartSubclassSkipsLazyPropertyDuringDecodeAndEncode() {
         let dict: [String: Any] = [
             "name": "Ada",
@@ -100,6 +107,10 @@ class Tests: XCTestCase {
         XCTAssertNil(encoded?["desc"])
     }
 
+    /// Verifies @SmartSubclass generates `required init()` when needed to satisfy Swift's
+    /// inheritance requirements. BaseModel declares `required init()`, so all subclasses must
+    /// provide it. The macro detects missing required inits (SmartSubclassMacro.swift:197-206)
+    /// and generates them. Without this, SubModel wouldn't compile.
     func testSmartSubclassGeneratesRequiredInit() {
         let model = SubModel()
         XCTAssertEqual(model.name, "")
