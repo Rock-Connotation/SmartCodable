@@ -8,6 +8,5 @@
 
 public typealias SmartCodableX = SmartDecodable & SmartEncodable
 
-
 // 用在泛型解析中
 extension Array: SmartCodableX where Element: SmartCodableX { }
