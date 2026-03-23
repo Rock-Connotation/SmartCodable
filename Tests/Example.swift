@@ -191,7 +191,7 @@ class Tests: XCTestCase {
 
 
 // SmartCodable
-struct Smart: SmartCodable {
+struct Smart: SmartCodableX {
     var name: String?
     var age: Int?
     var sex: Sex?
@@ -203,7 +203,7 @@ struct Smart: SmartCodable {
 }
 
 
-class BaseModel: SmartCodable {
+class BaseModel: SmartCodableX {
     
     var name: String = ""
     
@@ -223,7 +223,7 @@ class SubModel: BaseModel {
 }
 
 // MARK: - Issue-128 regression models
-class MultiLevelBaseModel: SmartCodable {
+class MultiLevelBaseModel: SmartCodableX {
     var name: String = ""
     required init() { }
 }
@@ -257,7 +257,7 @@ struct SingleValueReadOnly<Value: Codable>: Codable {
     }
 }
 
-class WrappedBaseModel: SmartCodable {
+class WrappedBaseModel: SmartCodableX {
     var name: String = ""
     required init() { }
 }
@@ -342,7 +342,7 @@ open class SCRootModel {
 }
 
 
-class WorkspaceModel: SCRootModel, SmartCodable {
+class WorkspaceModel: SCRootModel, SmartCodableX {
     var id: Int = 0
     var owner_id: Int = 0
     var title: String = ""
@@ -353,7 +353,7 @@ class WorkspaceModel: SCRootModel, SmartCodable {
     var subscription: WorkspaceSubscription?
 }
 
-class WorkspaceSubscription: SCRootModel, SmartCodable {
+class WorkspaceSubscription: SCRootModel, SmartCodableX {
     var cancelAtPeriodEnd: Bool = false
     var currentPeriodEndAt: String = ""
     var priceid: String = ""
