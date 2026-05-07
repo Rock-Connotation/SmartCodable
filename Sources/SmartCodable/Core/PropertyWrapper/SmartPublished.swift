@@ -6,13 +6,14 @@
 //
 
 import Foundation
+#if canImport(Combine)
 import SwiftUI
 import Combine
 
 
 /**
  A property wrapper that combines Combine's publishing functionality with Codable serialization.
- 
+
  Key Features:
  - Simplifies property declaration with property wrapper syntax
  - Supports reactive programming through Combine publishers
@@ -120,13 +121,10 @@ extension SmartPublished: Codable {
         self.wrappedValue = value
         publisher = Publisher(wrappedValue)
     }
-    
+
     public func encode(to encoder: Encoder) throws {
         var container = encoder.singleValueContainer()
         try container.encode(self.wrappedValue)
     }
 }
-
-
-
-
+#endif
