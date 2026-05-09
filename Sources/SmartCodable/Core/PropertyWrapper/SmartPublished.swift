@@ -10,15 +10,22 @@ import Foundation
 import SwiftUI
 import Combine
 
+// MARK: - @SmartPublished 属性包装器
 
-/**
- A property wrapper that combines Combine's publishing functionality with Codable serialization.
-
- Key Features:
- - Simplifies property declaration with property wrapper syntax
- - Supports reactive programming through Combine publishers
- - Maintains Codable compatibility for serialization
- */
+/// 将 Combine 发布能力与 Codable 序列化结合在一起的属性包装器。
+///
+/// **WHAT**: 让 Codable 模型的属性同时具备 Combine 发布能力和编解码能力。
+/// 通过 `$title` 投影值访问 Publisher，通过 `deserialize/encode` 处理 JSON。
+///
+/// **HOW (三个关键组件)**:
+/// 1. wrappedValue 的 willSet → 值变更前通知 publisher.subject（CurrentValueSubject）
+/// 2. Custom Publisher → 使用 CurrentValueSubject（非 PassthroughSubject），新订阅者立即收到当前值
+/// 3. ObservableObject subscript → 实现 `subscript(_enclosingInstance:wrapped:storage:)`，
+///    属性变更时触发 `objectWillChange`，驱动 SwiftUI 视图刷新
+///
+/// - Note: 需要 iOS 13.0+ / macOS 10.15+（依赖 Combine 框架）
+///
+/// - SeeAlso: `Document/SmartCodable-Learning/03-Advanced-Features/Property-Wrappers.md`
 @propertyWrapper
 @available(iOS 13.0, tvOS 13.0, watchOS 6.0, macOS 10.15, *)
 public struct SmartPublished<Value: Codable>: PropertyWrapperable {
@@ -60,41 +67,26 @@ public struct SmartPublished<Value: Codable>: PropertyWrapperable {
     
     // MARK: - Publisher Implementation
     
-    /**
-     The publisher that broadcasts changes to the wrapped value.
-     
-     Uses CurrentValueSubject which:
-     - Maintains the current value
-     - Sends current value to new subscribers
-     - More suitable than PassthroughSubject for property wrapper scenarios
-     */
+    /// 自定义 Publisher，使用 CurrentValueSubject 保留当前值。
+    /// 与 PassthroughSubject 不同，新订阅者会立即收到当前值，更适合属性包装器场景。
     public struct Publisher: Combine.Publisher {
         public typealias Output = Value
         public typealias Failure = Never
         
-        // CurrentValueSubject 是 Combine 中的一种 Subject，它会保存当前值并向新订阅者发送当前值。相比于 PassthroughSubject，它在初始化时就要求有一个初始值，因此更适合这种包装属性的场景。
+        // CurrentValueSubject 保存当前值，新订阅者立即收到当前值。
         var subject: CurrentValueSubject<Value, Never>
-        
-        // 这个方法实现了 Publisher 协议，将 subscriber 传递给 subject，从而将订阅者连接到这个发布者上。
+
         public func receive<S>(subscriber: S) where S: Subscriber, Self.Failure == S.Failure, Self.Output == S.Input {
             subject.subscribe(subscriber)
         }
-        
-        // Publisher 的构造函数接受一个初始值，并将其传递给 CurrentValueSubject 的初始化方法。
+
         init(_ output: Output) {
             subject = .init(output)
         }
     }
     
 
-    /**
-     Custom subscript for property wrapper integration with ObservableObject.
-     
-     - Parameters:
-       - observed: The ObservableObject instance containing this property
-       - wrappedKeyPath: Reference to the wrapped value
-       - storageKeyPath: Reference to this property wrapper instance
-     */
+    /// ObservableObject subscript：属性变更时触发 objectWillChange.send()，驱动 SwiftUI 刷新。
     public static subscript<OuterSelf: ObservableObject>(
         _enclosingInstance observed: OuterSelf,
         wrapped wrappedKeyPath: ReferenceWritableKeyPath<OuterSelf, Value>,

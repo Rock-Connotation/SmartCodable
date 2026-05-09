@@ -10,7 +10,10 @@
 
 import Foundation
 
-/// Represents a container of related log entries with common coding path
+// MARK: - LogContainer 日志容器
+
+/// 按 codingPath 组织一组字段日志，处理层级缩进格式化。
+/// comparePaths 比较前后容器路径差异，共同前缀不重复输出，差异部分递进缩进。
 struct LogContainer {
     
     /// 当前容器的类型（如果是unkeyed，就是Index+X。如果是keyed，就是Model的名称）

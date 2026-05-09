@@ -6,39 +6,45 @@
 //
 
 import Foundation
+
+/// SmartCodable 内部 JSON 树表示，替代 Foundation 的 NSNumber/NSString 等类型
+/// 设计目标：延迟类型决策，避免精度丢失
+/// 参见 Decoding-Pipeline.md §4
 enum JSONValue: Equatable {
     case string(String)
-    case number(String)
+    case number(String)  // 用字符串保存数字——延迟类型决策，避免精度丢失
     case bool(Bool)
     case null
 
     case array([JSONValue])
     case object([String: JSONValue])
-    
-    
+
+
+    /// 从 Foundation 对象递归构建 JSONValue 树
+    /// - 关键决策：NSNumber → Bool 区分（ObjC 中 @YES/@NO 是 char 型 NSNumber）
     static func make(_ value: Any?) -> Self? {
-        
+
         guard let value = value else { return nil }
-        
+
         if let jsonValue = value as? JSONValue {
             return jsonValue
         }
-        
+
         switch value {
         case is NSNull:
             return .null
         case let string as String:
             return .string(string)
         case let number as NSNumber:
-            
-            // 判断是否为 Bool 类型
+
+            // 判断是否为 Bool 类型（ObjC 中 @YES/@NO 是 char 型 NSNumber）
             let cfType = CFNumberGetType(number)
             if cfType == .charType {
                 return .bool(number.boolValue)
             } else {
                 return .number(number.stringValue)
             }
-            
+
         case let array as [Any]:
             let jsonArray = array.compactMap { make($0) }
             return .array(jsonArray)
@@ -74,8 +80,10 @@ enum JSONValue: Equatable {
     }
 }
 
+// MARK: - Helper 属性
 
 extension JSONValue {
+    /// 是否为叶子节点（非容器类型）
     var isValue: Bool {
         switch self {
         case .array, .object:
@@ -84,7 +92,8 @@ extension JSONValue {
             return true
         }
     }
-    
+
+    /// 是否为 null 值
     var isNull: Bool {
         switch self {
         case .null:
@@ -93,7 +102,8 @@ extension JSONValue {
             return false
         }
     }
-    
+
+    /// 是否为容器类型（数组或对象）
     var isContainer: Bool {
         switch self {
         case .array, .object:
@@ -104,36 +114,45 @@ extension JSONValue {
     }
 }
 
+// MARK: - 调试支持
+
 extension JSONValue {
+    /// 获取数据类型的调试描述
     var debugDataTypeDescription: String {
         switch self {
         case .array:
-            return "’Array‘"
+            return "’Array’"
         case .bool:
-            return "’Bool‘"
+            return "’Bool’"
         case .number:
-            return "’Number‘"
+            return "’Number’"
         case .string:
-            return "‘String’"
+            return "’String’"
         case .object:
-            return "’Dictionary‘"
+            return "’Dictionary’"
         case .null:
-            return "’null‘"
+            return "’null’"
         }
     }
 }
 
+// MARK: - NSNumber 转换扩展
 
 extension NSNumber {
+    /// 从 JSON 数字字符串转换为 NSNumber，采用分级保精度策略
+    /// - 整数优先：Int64(≤19位) → UInt64(≤20位)
+    /// - 超高精度：Decimal（17位以上的小数）
+    /// - 兜底：Double
+    /// 参见 Decoding-Pipeline.md §4.4
     static func fromJSONNumber(_ string: String) -> NSNumber? {
         let decIndex = string.firstIndex(of: ".")
-        // JSON 规范允许大写 E 作为科学计数法标记，这里需要一并识别
+        // JSON 规范允许大写 E 作为科学计数法标记
         let expIndex = string.firstIndex(where: { $0 == "e" || $0 == "E" })
         let isInteger = decIndex == nil && expIndex == nil
         let isNegative = string.utf8[string.utf8.startIndex] == UInt8(ascii: "-")
         let digitCount = string[string.startIndex..<(expIndex ?? string.endIndex)].count
-        
-        // Try Int64() or UInt64() first
+
+        // 整数优先：尝试 Int64() 或 UInt64()
         if isInteger {
             if isNegative {
                 if digitCount <= 19, let intValue = Int64(string) {
@@ -147,25 +166,24 @@ extension NSNumber {
         }
 
         var exp = 0
-        
+
         if let expIndex = expIndex {
             let expStartIndex = string.index(after: expIndex)
             if let parsed = Int(string[expStartIndex...]) {
                 exp = parsed
             }
         }
-        
-        // Decimal holds more digits of precision but a smaller exponent than Double
-        // so try that if the exponent fits and there are more digits than Double can hold
+
+        // Decimal 精度更高但指数范围更小，适用于高精度小数
         if digitCount > 17, exp >= -128, exp <= 127, let decimal = Decimal(string: string), decimal.isFinite {
             return NSDecimalNumber(decimal: decimal)
         }
-        
-        // Fall back to Double() for everything else
+
+        // 兜底方案：使用 Double()
         if let doubleValue = Double(string), doubleValue.isFinite {
             return NSNumber(value: doubleValue)
         }
-        
+
         return nil
     }
     

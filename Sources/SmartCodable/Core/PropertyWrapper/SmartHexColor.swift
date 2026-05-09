@@ -5,20 +5,20 @@
 //  Created by dadadongl on 2025/4/22.
 //
 
-/**
- * A property wrapper that enables UIColor/NSColor handling in Codable properties by decoding hex strings.
- *
- * Usage Example:
- *
- * ```
- struct SomeModel: SmartCodableX {
-     @SmartHexColor
-     var titleColor: UIColor? = .white
-     @SmartHexColor
-     var descColor: UIColor?
- }
- * ```
- */
+// MARK: - @SmartHexColor 属性包装器
+
+/// 十六进制字符串 ↔ UIColor/NSColor 的属性包装器。
+///
+/// **WHAT**: 解码时将 "#FF0000"、"FF0000"、"0xFF0000" 等格式解析为平台颜色对象；
+/// 编码时按指定的 HexFormat 输出十六进制字符串。
+///
+/// **HOW**: HexFormat 枚举通过"格式（3/4/6/8位）× 前缀（#/0x/无）"的组合设计，
+/// 一个枚举值同时表达颜色深度、透明度、前缀风格。`format(for:)` 自动识别输入前缀和长度。
+///
+/// **encodeHexFormat 缓存恢复**: 解码时 Swift 重新创建包装器实例，用户通过 init 传入的
+/// encodeHexFormat 丢失。必须通过 DecodingCache 从初始值中恢复。修改此文件时特别注意这一点。
+///
+/// - SeeAlso: `Document/SmartCodable-Learning/03-Advanced-Features/Property-Wrappers.md`
 
 #if os(iOS) || os(tvOS) || os(watchOS) || os(visionOS)
 import UIKit
@@ -85,9 +85,9 @@ extension SmartHexColor: Codable {
         
         
         /**
-         * 虽然初始化赋值时候`public init(wrappedValue: ColorObject?, encodeHexFormat: HexFormat? = nil)` 提供了 `encodeHexFormat`,但是在 `encode` 解析时重新初始化了对象导致赋值的 `encodeHexFormat` 没了。
-         * 通过缓存 `Cache` 获取使用者设置的该值。
-         * 再赋值到新对象的属性上。
+         * encodeHexFormat 缓存恢复：
+         * 解码时 Swift 重新创建包装器实例，init(wrappedValue:encodeHexFormat:) 传入的
+         * encodeHexFormat 在 init(from:) 中丢失。必须通过 DecodingCache 从初始值恢复。
          */
         if let arr = impl.codingPath.removeFromEnd(1),
            let hexColor: SmartHexColor = try? impl.cache.initialValue(forKey: impl.codingPath.last, codingPath: arr) {

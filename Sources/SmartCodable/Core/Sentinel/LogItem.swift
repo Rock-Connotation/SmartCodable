@@ -7,7 +7,12 @@
 
 import Foundation
 
+// MARK: - LogItem 单条日志
 
+/// 单个字段的错误记录。make(with:) 将 DecodingError 四种类型转换：
+/// .keyNotFound → MISSING KEY、.valueNotFound → NULL VALUE、
+/// .typeMismatch → TYPE MISMATCH、.dataCorrupted → DATA CORRUPTED。
+/// codingPath 调用 removeFromEnd(1) 去掉字段自身，保留父容器路径用于分组。
 extension LogItem: Equatable {
     static func ==(lhs: LogItem, rhs: LogItem) -> Bool {
         return lhs.fieldName == rhs.fieldName &&

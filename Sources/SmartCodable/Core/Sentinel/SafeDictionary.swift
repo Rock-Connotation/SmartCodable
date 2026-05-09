@@ -7,7 +7,25 @@
 
 import Foundation
 
+// MARK: - SafeDictionary 线程安全字典
 
+/// 基于 NSLock 的线程安全字典，作为 LogCache 的底层存储。
+///
+/// **WHAT**: 对原生 Dictionary 包装 NSLock，提供线程安全的 CRUD + updateEach 批量更新。
+/// 泛型 Key: Hashable，Value 无额外约束。
+///
+/// **WHY**: LogCache 在解码过程中被多个容器并发写入（同一 parsingMark 下不同 codingPath
+/// 各自独立创建 LogContainer），需要保证字典操作不出现 data race。选择 NSLock 而非
+/// DispatchQueue 串行队列是因为：
+/// - NSLock 对于简单 get/set 操作开销更低，无需上下文切换
+/// - 所有操作都是 O(1) 的字典读写，不会长时间持锁
+/// - defer { lock.unlock() } 保证异常路径也能释放锁
+///
+/// **HOW**: 每个公开方法都是 lock → 操作 → defer unlock 三段式。
+/// updateEach 先把字典拷出，在锁外执行 body 闭包，构建新字典后整体替换 ——
+/// 这样 body 内的耗时操作不会阻塞其他线程。
+///
+/// - SeeAlso: `Document/SmartCodable-Learning/03-Advanced-Features/Diagnostics.md`
 class SafeDictionary<Key: Hashable, Value> {
     
     private var dictionary: [Key: Value] = [:]

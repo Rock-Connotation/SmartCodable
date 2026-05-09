@@ -7,31 +7,36 @@
 
 import Foundation
 
-/**
- A logging system for tracking and reporting decoding errors in SmartCodable parsing.
- 
- The system provides:
- - Hierarchical error logging with visual formatting
- - Configurable logging levels
- - Thread-safe logging operations
- - Customizable output handlers
- */
+// MARK: - LogCache 日志缓存
+
+/// 按 parsingMark 聚合一次解析的所有日志，在解析结束时统一格式化输出。
+///
+/// **WHAT**: 提供 save / formatLogs / clearCache 三个核心操作。
+/// 底层使用 SafeDictionary<String, LogContainer>，key 为 `parsingMark + codingPath`。
+///
+/// **HOW (formatLogs 管线)**:
+/// 1. filterLogItem — 去重（unkeyed 容器的 Index X 日志去重）
+/// 2. alignTypeNamesInAllSnapshots — 字段名对齐到最大长度
+/// 3. sortKeys — 按 key 字母序排列保证输出一致
+/// 4. 遍历 → LogContainer.formatMessage → 拼接
+///
+/// - SeeAlso: `Document/SmartCodable-Learning/03-Advanced-Features/Diagnostics.md`
 struct LogCache {
     
     private var snapshotDict = SafeDictionary<String, LogContainer>()
     
-    /// Saves a decoding error to the log cache
+    /// 保存解码错误：DecodingError → LogItem → cacheLog
     mutating func save(error: DecodingError, className: String, parsingMark: String) {
         let log = LogItem.make(with: error)
         cacheLog(log, className: className, parsingMark: parsingMark)
     }
-    
-    /// Clears cached logs for a specific parsing session
+
+    /// 按 parsingMark 前缀清理缓存，解析完成后调用，防止内存泄漏
     mutating func clearCache(parsingMark: String) {
         snapshotDict.removeValue { $0.hasPrefix(parsingMark) }
     }
-    
-    /// Formats all logs for a parsing session into a readable string
+
+    /// 格式化输出：去重 → 对齐字段名 → 排序 → 拼接。返回 nil 表示无日志。
     mutating func formatLogs(parsingMark: String) -> String? {
         
         filterLogItem()
@@ -55,7 +60,7 @@ struct LogCache {
 
 extension LogCache {
     
-    /// Sorts log keys for consistent output ordering
+    /// 按 parsingMark 前缀筛选 + 字母序排序，保证输出一致性
     func sortKeys(_ array: [String], parsingMark: String) -> [String] {
         //  获取当前解析的keys
         let filterArray = array.filter {
@@ -67,7 +72,7 @@ extension LogCache {
         return sortedArray
     }
     
-    /// Filters duplicate log items across containers
+    /// 去重 unkeyed 容器（Index X）中的重复日志
     mutating func filterLogItem() {
         let pattern = "Index \\d+"
         let regex = try! NSRegularExpression(pattern: pattern, options: [])
@@ -103,7 +108,7 @@ extension LogCache {
         snapshotDict = tempDict
     }
     
-    /// Caches an individual log item
+    /// 缓存单条日志。同 key 合并 logs，新 key 创建 LogContainer。
     private mutating func cacheLog(_ log: LogItem?, className: String, parsingMark: String) {
         
         guard let log = log else { return }
@@ -124,13 +129,13 @@ extension LogCache {
         }
     }
     
-    /// Creates a unique key for a log entry
+    /// key = parsingMark + codingPath 各段用 "-" 连接，保证同路径日志归入同一容器
     private func createKey(path: [CodingKey], parsingMark: String) -> String {
         let arr = path.map { $0.stringValue }
         return parsingMark + "\(arr.joined(separator: "-"))"
     }
     
-    /// Aligns field names for consistent visual output
+    /// 字段名对齐到每个容器内最大长度，保证 `: ` 冒号对齐
     private mutating func alignTypeNamesInAllSnapshots(parsingMark: String) {
         snapshotDict.updateEach { key, snapshot in
             let maxLength = snapshot.logs.max(by: { $0.fieldName.count < $1.fieldName.count })?.fieldName.count ?? 0

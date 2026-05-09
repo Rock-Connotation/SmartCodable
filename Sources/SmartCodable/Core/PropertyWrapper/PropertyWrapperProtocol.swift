@@ -7,13 +7,21 @@
 
 import Foundation
 
-/**
- Protocol defining requirements for types that can publish wrapped Codable values.
- 
- Provides a unified interface for any type conforming to this protocol.
- - WrappedValue: The generic type that must conform to Codable
- - createInstance: Attempts to create an instance from any value
- */
+// MARK: - 属性包装器统一协议
+
+/// 所有 SmartCodable 属性包装器必须遵循的统一接口。
+///
+/// **WHAT**: 定义包装器的 5 个核心能力——取值、构造、类型判断、实例创建、解码回调。
+///
+/// **WHY**: 如果没有统一协议，KeyedContainer 需要为每个包装器类型写独立的 case 分支（如
+/// `if let any = value as? SmartAny<...>`），每增加一个包装器就多一个分支。有了
+/// PropertyWrapperable，容器只关心协议方法，不关心具体类型——符合"消除特殊情况"的设计原则。
+///
+/// **HOW**: Swift 属性包装器编译后生成 `_propertyName` 底层存储，协议通过
+/// `wrappedSmartDecodableType` 让 DecodingCache 能穿透 `_` 前缀找到内部模型类型，
+/// 从而正确缓存快照和回退默认值。
+///
+/// - SeeAlso: `Document/SmartCodable-Learning/03-Advanced-Features/Property-Wrappers.md`
 public protocol PropertyWrapperable {
     associatedtype WrappedValue
     
@@ -25,26 +33,36 @@ public protocol PropertyWrapperable {
 
     static func createInstance(with value: Any) -> Self?
     
-    /**
-     Callback invoked when the wrapped value finishes decoding/mapping.
-     
-     - Returns: An optional new instance of the wrapper with processed value
-     - Note: Primarily used by property wrappers containing types conforming to SmartDecodable
-     */
+    /// 解码完成后触发 wrappedValue 内部模型的 didFinishMapping()。
+    ///
+    /// **WHY**: Swift 不会自动将 didFinishMapping 从 wrappedValue 穿透到外层包装器。
+    /// 如果 wrappedValue 是 SmartDecodable 模型（如 `@SmartAny var user: User`），
+    /// 解码完成后必须手动调用 `user.didFinishMapping()`，否则用户重写的回调不会执行。
+    ///
+    /// **HOW**: 返回 `Self?`——不是 SmartDecodable 则返回 nil，是则返回包含已触发回调的新实例。
     func wrappedValueDidFinishMapping() -> Self?
 }
 
 public extension PropertyWrapperable {
+    /// 静态判断 WrappedValue 是否为 SmartDecodable 或 Optional<SmartDecodable>。
+    ///
+    /// **WHY**: DecodingCache 需要知道包装器内部是否包含 SmartDecodable 模型，
+    /// 以决定是否缓存快照（用于解码失败时的默认值回退）。
+    ///
+    /// **HOW**: 两层尝试——① WrappedValue 本身是 SmartDecodable.Type；
+    /// ② WrappedValue 是 Optional，其 Wrapped 类型是 SmartDecodable.Type。
+    /// 第二层通过内部协议 `_OptionalType` 解决 Swift 泛型无法直接判断
+    /// `Optional<SmartDecodable>` 的问题。
     static var wrappedSmartDecodableType: SmartDecodable.Type? {
 
         let valueType = WrappedValue.self
 
-        // 1️⃣ WrappedValue 本身是 SmartDecodable
+        // WrappedValue 本身是 SmartDecodable
         if let smart = valueType as? SmartDecodable.Type {
             return smart
         }
 
-        // 2️⃣ WrappedValue 是 Optional<SmartDecodable>
+        // WrappedValue 是 Optional<SmartDecodable>
         if let optionalType = valueType as? _OptionalType.Type,
            let smart = optionalType.wrappedType as? SmartDecodable.Type {
             return smart
@@ -54,6 +72,9 @@ public extension PropertyWrapperable {
     }
 }
 
+/// 内部协议，让 Optional 暴露其 Wrapped 元类型。
+/// Swift 的 Optional 是枚举泛型，无法直接通过 `WrappedValue.self` 获取内部类型，
+/// 需要此协议桥接。
 protocol _OptionalType {
     static var wrappedType: Any.Type { get }
 }
@@ -65,15 +86,24 @@ extension Optional: _OptionalType {
 }
 
 // ============================================================
-// 统一为所有 PropertyWrapperable 提供 Equatable / Hashable 支持
-/// 为遵循 PropertyWrapperable 的泛型 wrapper 提供默认的 Equatable 实现
+// MARK: - Equatable / Hashable 统一支持
+//
+// **WHY**: 协议扩展为泛型和非泛型包装器分别提供默认实现。
+// 泛型包装器（SmartAny、SmartFlat、SmartIgnored）由于 Swift 泛型限制，
+// 编译器无法自动推导 Equatable/Hashable，必须显式声明 + 条件约束。
+// 非泛型包装器（SmartDate、SmartHexColor）可以直接声明。
+// SmartHexColor 的 Equatable 比较 rgbaComponents 而非指针——相同颜色
+// 可能有不同的内部表示（如不同色彩空间），按分量比较才能正确判等。
+// ============================================================
+
+/// 为泛型 wrapper 提供默认 Equatable（委托给 wrappedValue）
 extension PropertyWrapperable where WrappedValue: Equatable, Self: Equatable {
     public static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.wrappedValue == rhs.wrappedValue
     }
 }
 
-/// 为遵循 PropertyWrapperable 的泛型 wrapper 提供默认的 Hashable 实现
+/// 为泛型 wrapper 提供默认 Hashable（委托给 wrappedValue）
 extension PropertyWrapperable where WrappedValue: Hashable, Self: Hashable {
     public func hash(into hasher: inout Hasher) {
         hasher.combine(wrappedValue)
@@ -81,9 +111,11 @@ extension PropertyWrapperable where WrappedValue: Hashable, Self: Hashable {
 }
 
 // ============================================================
-// 泛型 wrapper 的空声明扩展
-// 由于 Swift 泛型限制，编译器无法自动将泛型 wrapper 标记为 Equatable / Hashable
-// 所以必须显式声明遵循协议，同时条件约束 WrappedValue
+// MARK: - 泛型包装器的 Equatable / Hashable 显式声明
+//
+// Swift 泛型限制：编译器无法自动将泛型 wrapper 标记为 Equatable/Hashable，
+// 必须在此逐一显式声明，同时用 where 子句约束 WrappedValue。
+// ============================================================
 
 extension SmartFlat: Equatable where T: Equatable {}
 extension SmartFlat: Hashable where T: Hashable {}
@@ -96,8 +128,8 @@ extension SmartAny: Hashable where T: Hashable {}
 
 
 
-// 非泛型
-// 因为非泛型 wrapper 的类型固定，不依赖泛型约束，所以可以直接声明协议遵循
+// MARK: - 非泛型包装器的 Equatable / Hashable 声明
+// 非泛型 wrapper 类型固定，可直接声明协议遵循。
 extension SmartDate: Equatable {}
 extension SmartDate: Hashable {}
 

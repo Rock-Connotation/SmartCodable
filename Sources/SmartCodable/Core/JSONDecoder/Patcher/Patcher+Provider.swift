@@ -10,7 +10,18 @@ import Foundation
 
 
 extension Patcher {
+    /// 零值提供者：为类型提供默认值
+    ///
+    /// 位置：四层韧性架构的最后一道防线
+    /// WHAT: 当所有解码策略都失败时，返回类型的零值
+    /// HOW: 支持 Defaultable/SmartDecodable/SmartCaseDefaultable/SmartAssociatedEnumerable 四种协议的多态处理
+    /// WHY: 确保解码永远失败，至少返回一个有意义的默认值
     struct Provider {
+        /// 获取类型 T 的默认值（支持多种协议）
+        ///
+        /// WHAT: 返回类型的零值，优先级：Defaultable > SmartDecodable > SmartCaseDefaultable > SmartAssociatedEnumerable
+        /// HOW: 协议类型检查和强制类型转换
+        /// WHY: 支持自定义默认值逻辑，同时为常见类型提供内置默认值
         static func defaultValue() throws -> T {
             
             
@@ -43,6 +54,11 @@ extension Patcher {
 
 
 
+/// 零值协议：类型提供默认值的协议
+///
+/// WHAT: 定义类型默认值的协议
+/// HOW: 静态属性 defaultValue 返回 Self 类型
+/// WHY: 允许类型自定义默认值逻辑（如 Date() 返回当前时间，而不是零值）
 protocol Defaultable {
     static var defaultValue: Self { get }
 }

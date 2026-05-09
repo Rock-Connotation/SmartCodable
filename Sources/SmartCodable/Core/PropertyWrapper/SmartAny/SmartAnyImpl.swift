@@ -7,28 +7,26 @@
 
 import Foundation
 
-/// SmartAny represents any type for Codable parsing, which can be simply understood as Any.
+// MARK: - SmartAnyImpl 内部枚举
+
+/// SmartCodable 内部动态类型系统，用 5 个 case 覆盖 JSON 所有可能的值类型。
 ///
-/// Codable does not support parsing of the Any type. Consequently, corresponding types like dictionary [String: Any], array [Any], and [[String: Any]] cannot be parsed.
-/// By wrapping it with SmartAny, it achieves the purpose of enabling parsing for Any types.
+/// **WHAT**: 将 JSON 值归一化为 5 种情况，提供 `peel` 展开和 Codable 编解码。
 ///
-/// To retrieve the original value, call '.peel' to unwrap it.
+/// **WHY (为什么是 NSNumber？)**: 早期实现将每种数字类型拆成独立 case（bool/double/float/int/int8/...），
+/// 但 JSON 中的数字 `5` 无法确定它是 Int、Int8 还是 UInt——强类型指定会导致 `as? Double` 失败。
+/// NSNumber 在内部保留原始数值的同时允许运行时查询具体类型，牺牲部分类型安全换取动态类型灵活性。
+/// 在 @SmartAny 需要处理 `[String: Any]` 的场景下，这个取舍是合理的。
+///
+/// **WHY (5 个 case？)**: JSON 规范只有 6 种值类型，其中 boolean 在 Foundation 中通过 NSNumber 桥接
+/// （kCFBooleanTrue/kCFBooleanFalse），所以 number 一个 case 覆盖了数字和布尔。
+///
+/// - SeeAlso: `Document/SmartCodable-Learning/03-Advanced-Features/Property-Wrappers.md`
 enum SmartAnyImpl {
     
-    /// In Swift, NSNumber is a composite type that can accommodate various numeric types:
-    ///  - All integer types: Int, Int8, Int16, Int32, Int64, UInt, UInt8, UInt16, UInt32, UInt64
-    ///  - All floating-point types: Float, Double
-    ///  - Boolean type: Bool
-    ///
-    /// Due to its dynamic nature, it can store different types of numbers and query their specific types at runtime.
-    /// This provides a degree of flexibility but also sacrifices the type safety and performance advantages of Swift's native types.
-    ///
-    /// In the initial implementation, these basic data types were handled separately. For example:
-    ///  - case bool(Bool)
-    ///  - case double(Double), cgFloat(CGFloat), float(Float)
-    ///  - case int(Int), int8(Int8), int16(Int16), int32(Int32), int64(Int64)
-    ///  - case uInt(UInt), uInt8(UInt8), uInt16(UInt16), uInt32(UInt32), uInt64(UInt64)
-    /// However, during parsing, a situation arises: the data type is forcibly specified, losing the flexibility of NSNumber. For instance, `as? Double` will fail when the data is 5.
+    /// 所有数字类型（含 Bool）。NSNumber 的动态特性允许运行时查询具体类型，
+    /// 避免了早期实现中拆分为 bool/double/float/int/int8... 等独立 case 时
+    /// 因类型信息丢失导致的 `as? Double` 失败问题。
     case number(NSNumber)
     case string(String)
     case dict([String: SmartAnyImpl])
@@ -41,13 +39,17 @@ enum SmartAnyImpl {
     }
 }
 
+// MARK: - cover / peel 转换桥梁
+// cover: Swift 原生类型 → SmartAnyImpl（编码方向）
+// peel:  SmartAnyImpl → Swift 原生类型（解码方向）
+
 extension Dictionary where Key == String {
-    /// Converts from [String: Any] type to [String: SmartAny]
+    /// [String: Any] → [String: SmartAnyImpl]，用于编码时将字典值逐项包装
     internal var cover: [String: SmartAnyImpl] {
         mapValues { SmartAnyImpl(from: $0) }
     }
-    
-    /// Unwraps if it exists, otherwise returns itself.
+
+    /// 如果是 SmartAnyImpl 字典则 peel，否则直接返回自身（已是原生类型）
     internal var peelIfPresent: [String: Any] {
         if let dict = self as? [String: SmartAnyImpl] {
             return dict.peel
@@ -58,11 +60,12 @@ extension Dictionary where Key == String {
 }
 
 extension Array {
+    /// [Any] → [SmartAnyImpl]，用于编码时将数组元素逐项包装
     internal var cover: [ SmartAnyImpl] {
         map { SmartAnyImpl(from: $0) }
     }
-    
-    /// Unwraps if it exists, otherwise returns itself.
+
+    /// 尝试 peel 三种可能的数组包装形式
     internal var peelIfPresent: [Any] {
         if let arr = self as? [[String: SmartAnyImpl]] {
             return arr.peel
@@ -76,20 +79,20 @@ extension Array {
 
 
 extension Dictionary where Key == String, Value == SmartAnyImpl {
-    /// The parsed value will be wrapped by SmartAny. Use this property to unwrap it.
+    /// SmartAnyImpl 字典 → [String: Any]，递归 peel 每个值
     internal var peel: [String: Any] {
         mapValues { $0.peel }
     }
 }
 extension Array where Element == SmartAnyImpl {
-    /// The parsed value will be wrapped by SmartAny. Use this property to unwrap it.
+    /// SmartAnyImpl 数组 → [Any]，递归 peel 每个元素
     internal var peel: [Any] {
         map { $0.peel }
     }
 }
 
 extension Array where Element == [String: SmartAnyImpl] {
-    /// The parsed value will be wrapped by SmartAny. Use this property to unwrap it.
+    /// [[String: SmartAnyImpl]] → [Any]（嵌套字典数组场景）
     public var peel: [Any] {
         map { $0.peel }
     }
@@ -97,7 +100,7 @@ extension Array where Element == [String: SmartAnyImpl] {
 
 
 extension SmartAnyImpl {
-    /// The parsed value will be wrapped by SmartAny. Use this property to unwrap it.
+    /// SmartAnyImpl → 原生 Swift 类型。dict/array 递归 peel，number/string/null 直接返回。
     public var peel: Any {
         switch self {
         case .number(let v):  return v
@@ -162,13 +165,9 @@ extension SmartAnyImpl: Codable {
         case .array(let arrayValue):
             try container.encode(arrayValue)
         case .number(let value):
-            /**
-             Swift为了与Objective-C的兼容性，提供了自动桥接功能，允许Swift的数值类型和NSNumber之间的无缝转换。这包括：
-             所有的整数类型：Int, Int8, Int16, Int32, Int64, UInt, UInt8, UInt16, UInt32, UInt64
-             所有的浮点类型：Float, Double
-             布尔类型：Bool
-             */
-            
+            // NSNumber 编码：必须先判断 Bool（kCFBoolean 的内存标识不同于纯数字），
+            // 然后按精度从高到低尝试类型转换（Double → Float → CGFloat → Int... → UInt64）。
+            // 顺序不能调整，否则布尔会被误判为数字，或 Float 被提升为 Double。
             if value === kCFBooleanTrue as NSNumber || value === kCFBooleanFalse as NSNumber {
                 if let bool = value as? Bool {
                     try container.encode(bool)
@@ -228,8 +227,18 @@ extension SmartAnyImpl {
 
 
 extension JSONDecoderImpl {
+    // MARK: - unwrapSmartAny（SmartAnyImpl 解码核心）
+
+    /// 将 JSON 值转换为 SmartAnyImpl 枚举。根据 JSON 类型分派：
+    /// - null/string/bool → 直接映射
+    /// - object → decodeIfPresent([String: SmartAnyImpl].self) → .dict
+    /// - array  → decodeIfPresent([SmartAnyImpl].self) → .array
+    /// - number → 按精度策略解析：科学计数法用 Decimal（次正规数回退 Double），
+    ///   普通浮点用 Double，整数按 Int64 范围从窄到宽尝试（Int8→UInt64），
+    ///   超出 Int64 范围则保留为 string 避免精度丢失
     fileprivate func unwrapSmartAny() throws -> SmartAnyImpl {
-        
+
+        // 优先走转换器路径
         if let tranformer = cache.valueTransformer(for: codingPath.last, in: codingPath.dropLast()) {
             if let decoded = tranformer.transformFromJSON(json) as? SmartAnyImpl {
                 return decoded
@@ -239,10 +248,10 @@ extension JSONDecoderImpl {
                                           debugDescription: "Invalid SmartAny."))
             }
         }
-        
+
         let container = SingleValueContainer(impl: self, codingPath: self.codingPath, json: self.json)
-        
-        
+
+
         switch json {
         case .null:
             return .null(NSNull())
@@ -260,12 +269,12 @@ extension JSONDecoderImpl {
             }
         case .number(let number):
             if number.contains(".") { // 浮点数
-                // JSON 规范（RFC 8259）允许 e / E 两种写法，这里需要大小写都兼容
-                if number.contains("e") || number.contains("E") { // 科学计数法
+                // RFC 8259 允许 e/E 两种科学计数法
+                if number.contains("e") || number.contains("E") {
                     if let temp = container.decodeIfPresent(Decimal.self) as? NSNumber {
                         return .number(temp)
                     }
-                    // Decimal 无法覆盖次正规数（如 ±E-324）等极小值，回退到 Double 兜底
+                    // Decimal 无法覆盖次正规数（如 ±E-324），回退 Double
                     if let temp = container.decodeIfPresent(Double.self) as? NSNumber {
                         return .number(temp)
                     }
@@ -275,7 +284,7 @@ extension JSONDecoderImpl {
                     }
                 }
             } else {
-                if let _ = Int64(number) { // 在Int64的范围内
+                if let _ = Int64(number) { // Int64 范围内：从窄到宽尝试匹配
                     if let temp = container.decodeIfPresent(Int8.self) as? NSNumber {
                         return .number(temp)
                     } else if let temp = container.decodeIfPresent(UInt8.self) as? NSNumber {
@@ -298,11 +307,12 @@ extension JSONDecoderImpl {
                         return .number(temp)
                     }
                 } else {
+                    // 超出 Int64 范围的大整数，保留字符串避免精度丢失
                     return .string(number)
                 }
             }
         }
- 
+
         throw DecodingError.dataCorrupted(
             DecodingError.Context(codingPath: self.codingPath,
                                   debugDescription: "Invalid SmartAny."))

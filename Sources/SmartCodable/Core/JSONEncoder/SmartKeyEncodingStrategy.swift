@@ -8,8 +8,9 @@
 import Foundation
 
 extension JSONEncoder {
-    /// Data的解析策略
-    /// 由于是JSONEncoder解析器只能解析JSON数据，所以Data类型只能用base64.
+    /// Data 编码策略：将 Data 转换为 JSON 兼容格式
+    /// JSON 标准不支持二进制数据，只能使用 base64 编码为字符串
+    /// 与 SmartDataDecodingStrategy 对称
     public enum SmartDataEncodingStrategy: Sendable {
         case base64
     }
@@ -17,62 +18,82 @@ extension JSONEncoder {
 
 
 extension JSONEncoder {
-    
+
+    /// 键名编码策略：控制编码时如何转换键名
+    /// 与 SmartKeyDecodingStrategy 对称（方向相反：解码是 JSON→模型，编码是模型→JSON）
+    /// 学习文档：键名策略 - 编码端策略
     public enum SmartKeyEncodingStrategy : Sendable {
-        
-        /// Use the keys specified by each type. This is the default strategy.
+
+        /// 使用模型定义的原始键名（默认策略）
+        /// 不进行任何转换，直接使用 CodingKeys 中的值
         case useDefaultKeys
 
-        /// Convert from "camelCaseKeys" to "snake_case_keys" before writing a key to JSON payload.
+        /// 将驼峰命名转换为蛇形命名（camelCase → snake_case）
+        /// 方向：从模型键名到 JSON 键名（与解码端 fromSnakeCase 相反）
         ///
-        /// Capital characters are determined by testing membership in Unicode General Categories Lu and Lt.
-        /// The conversion to lower case uses `Locale.system`, also known as the ICU "root" locale. This means the result is consistent regardless of the current user's locale and language preferences.
+        /// 转换算法：
+        /// 1. 在小写到大写的边界拆分单词
+        /// 2. 在单词之间插入下划线
+        /// 3. 整个字符串转为小写
+        /// 4. 保留首尾的下划线
         ///
-        /// Converting from camel case to snake case:
-        /// 1. Splits words at the boundary of lower-case to upper-case
-        /// 2. Inserts `_` between words
-        /// 3. Lowercases the entire string
-        /// 4. Preserves starting and ending `_`.
-        ///
-        /// For example, `oneTwoThree` becomes `one_two_three`. `_oneTwoThree_` becomes `_one_two_three_`.
-        ///
-        /// - Note: Using a key encoding strategy has a nominal performance cost, as each string key has to be converted.
+        /// 示例：`oneTwoThree` → `one_two_three`、`myURLProperty` → `my_url_property`
+        /// 特殊处理：连续大写字母视为一个单词（如 URL 不会拆分为 U_R_L）
+        /// 学习文档：键名策略 - 蛇形转换算法
         case toSnakeCase
-        
-        /// Convert the first letter of the key to lower case before attempting to match a key with the one specified by each type.
-        /// For example, `OneTwoThree` becomes `oneTwoThree`.
+
+        /// 将首字母转换为小写（PascalCase → camelCase）
+        /// 示例：`OneTwoThree` → `oneTwoThree`
         ///
-        /// - Note: This strategy should be used with caution, especially if the key's first letter is intended to be uppercase for distinguishing purposes. It also incurs a nominal performance cost, as the first character of each key needs to be inspected and possibly modified.
+        /// 注意：谨慎使用，首字母大小写可能用于区分不同含义的键
+        /// 学习文档：键名策略 - 首字母转换
         case firstLetterLower
-        
-        /// Convert the first letter of the key to upper case before attempting to match a key with the one specified by each type.
-        /// For example, `oneTwoThree` becomes `OneTwoThree`.
+
+        /// 将首字母转换为大写（camelCase → PascalCase）
+        /// 示例：`oneTwoThree` → `OneTwoThree`
         ///
-        /// - Note: This strategy should be used when the keys are expected to start with a lowercase letter and need to be converted to start with an uppercase letter. It incurs a nominal performance cost, as the first character of each key needs to be inspected and possibly modified.
+        /// 注意：适用于 JSON 键名需要首字母大写的场景
+        /// 学习文档：键名策略 - 首字母转换
         case firstLetterUpper
     }
 }
 
 
 extension JSONEncoder.SmartKeyEncodingStrategy {
-    
+
+    /// 首字母转小写实现
+    /// 使用 prefix 和 dropFirst 避免字符串复制，提高性能
+    /// 学习文档：键名策略 - 首字母转换实现
     static func _convertFirstLetterToLowercase(_ stringKey: String) -> String {
         guard !stringKey.isEmpty else { return stringKey }
 
         return stringKey.prefix(1).lowercased() + stringKey.dropFirst()
     }
     
+    /// 首字母转大写实现
+    /// 与 _convertFirstLetterToLowercase 对称
+    /// 学习文档：键名策略 - 首字母转换实现
     static func _convertFirstLetterToUppercase(_ stringKey: String) -> String {
         guard !stringKey.isEmpty else { return stringKey }
 
         return stringKey.prefix(1).uppercased() + stringKey.dropFirst()
     }
     
+    /// 驼峰转蛇形核心算法（与解码端 _convertFromSnakeCase 对称）
+    /// 处理复杂场景：连续大写字母（如 URL）、混合大小写
+    /// 算法步骤：
+    /// 1. 在小写→大写边界拆分（myProperty → my / Property）
+    /// 2. 在连续大写→小写边界拆分（myURLProperty → my / URL / Property）
+    /// 3. 用下划线连接并小写
+    /// 学习文档：键名策略 - 蛇形转换算法详解
     static func _convertToSnakeCase(_ stringKey: String) -> String {
         guard !stringKey.isEmpty else { return stringKey }
 
         var words: [Range<String.Index>] = []
-        // The general idea of this algorithm is to split words on transition from lower to upper case, then on transition of >1 upper case characters to lowercase
+        // 算法核心：在小写→大写边界拆分单词，然后在连续大写→小写边界再次拆分
+        // myProperty → my_property
+        // myURLProperty → my_url_property
+        // 假设首字母小写（Swift 命名约定）
         //
         // myProperty -> my_property
         // myURLProperty -> my_url_property
@@ -81,36 +102,40 @@ extension JSONEncoder.SmartKeyEncodingStrategy {
         var wordStart = stringKey.startIndex
         var searchRange = stringKey.index(after: wordStart)..<stringKey.endIndex
 
-        // Find next uppercase character
+        // 查找下一个大写字母（单词边界）
         while let upperCaseRange = stringKey.rangeOfCharacter(from: CharacterSet.uppercaseLetters, options: [], range: searchRange) {
             let untilUpperCase = wordStart..<upperCaseRange.lowerBound
             words.append(untilUpperCase)
 
-            // Find next lowercase character
+            // 查找下一个小写字母（用于检测连续大写字母）
             searchRange = upperCaseRange.lowerBound..<searchRange.upperBound
             guard let lowerCaseRange = stringKey.rangeOfCharacter(from: CharacterSet.lowercaseLetters, options: [], range: searchRange) else {
-                // There are no more lower case letters. Just end here.
+                // 没有更多小写字母，直接结束
                 wordStart = searchRange.lowerBound
                 break
             }
 
-            // Is the next lowercase letter more than 1 after the uppercase? If so, we encountered a group of uppercase letters that we should treat as its own word
+            // 大写字母后紧接小写字母，说明不是连续大写（如 Property 中的 P 不是单独单词）
             let nextCharacterAfterCapital = stringKey.index(after: upperCaseRange.lowerBound)
             if lowerCaseRange.lowerBound == nextCharacterAfterCapital {
-                // The next character after capital is a lower case character and therefore not a word boundary.
-                // Continue searching for the next upper case for the boundary.
+                // 大写后是小写，不是单词边界（如 myProperty 中的 P）
+                // 继续查找下一个大写字母作为边界
                 wordStart = upperCaseRange.lowerBound
             } else {
-                // There was a range of >1 capital letters. Turn those into a word, stopping at the capital before the lower case character.
+                // 连续大写字母（如 URL），在最后一个大写字母前拆分
+                // 将连续大写视为一个单词（URL → url）
                 let beforeLowerIndex = stringKey.index(before: lowerCaseRange.lowerBound)
                 words.append(upperCaseRange.lowerBound..<beforeLowerIndex)
 
-                // Next word starts at the capital before the lowercase we just found
+                // 下一个单词从最后一个大写字母开始
                 wordStart = beforeLowerIndex
             }
             searchRange = lowerCaseRange.upperBound..<searchRange.upperBound
         }
+        // 添加最后一个单词
         words.append(wordStart..<searchRange.upperBound)
+
+        // 用下划线连接所有单词并转为小写
         let result = words.map({ (range) in
             return stringKey[range].lowercased()
         }).joined(separator: "_")

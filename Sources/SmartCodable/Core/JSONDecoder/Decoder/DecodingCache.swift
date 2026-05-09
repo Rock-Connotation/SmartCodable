@@ -8,28 +8,30 @@
 import Foundation
 
 
-/// Caches default values during decoding operations
-/// Used to provide fallback values when decoding fails
+/// 解码缓存 - 为解码操作提供默认值和值转换器
+/// 核心优化：使用DecodingSnapshot栈管理嵌套解码状态，延迟初始化避免不必要的Mirror反射
 class DecodingCache: Cachable {
-    
+
     typealias SomeSnapshot = DecodingSnapshot
 
-    /// Stack of decoding snapshots
+    /// 解码快照栈（支持嵌套解码，如数组中的对象）
     var snapshots: [DecodingSnapshot] = []
 
-    /// Creates and stores a snapshot of initial values for a Decodable type
-    /// - Parameter type: The Decodable type to cache
+    /// 为SmartDecodable类型创建并存储初始值快照（解码开始时调用）
+    /// 缓存条件：
+    /// 1. 类型直接是SmartDecodable
+    /// 2. 类型是属性包装器，且wrappedValue是SmartDecodable
+    /// 3. 其他类型不缓存（性能优化）
     func cacheSnapshot<T>(for type: T.Type, codingPath: [CodingKey]) {
-        
-        
-        
+
+
+
         let smartType: SmartDecodable.Type?
 
-        /** 缓存条件
-         * 1. 直接是 SmartDecodable
-         * 2. 是属性包装器，且 WrappedValue 是 SmartDecodable
-         * 3. 其它情况，不关心
-        */
+        // 缓存条件判断
+        // - 直接实现SmartDecodable：直接缓存
+        // - 属性包装器场景：缓存其wrappedValue类型（用于@SmartAny等）
+        // - 其他类型：跳过缓存
         if let objectType = type as? SmartDecodable.Type {
             smartType = objectType
         } else if let wrapperType = type as? any PropertyWrapperable.Type {
@@ -39,18 +41,15 @@ class DecodingCache: Cachable {
         }
 
         guard let object = smartType else { return }
-        
+
         let snapshot = DecodingSnapshot()
         snapshot.codingPath = codingPath
-        // [initialValues] Lazy initialization:
-        // Generate initial values via reflection only when first accessed,
-        // using the recorded objectType to optimize parsing performance.
+        // 延迟初始化优化：仅在首次访问时通过Mirror反射生成初始值
         snapshot.objectType = object
         snapshots.append(snapshot)
     }
-    
-    /// Removes the most recent snapshot for the given type
-    /// - Parameter type: The type to remove from cache
+
+    /// 移除最近的快照（解码完成后调用，保持栈平衡）
     func removeSnapshot<T>(for type: T.Type) {
         guard T.self is SmartDecodable.Type else { return }
         if !snapshots.isEmpty {
@@ -61,38 +60,36 @@ class DecodingCache: Cachable {
 
 // MARK: - 获取属性初始值
 extension DecodingCache {
-    /// 查找指定解码路径下容器中某个字段的初始值。
-    ///
-    /// 该方法会根据传入的 `codingPath`（代表某个解码容器的位置），
-    /// 在缓存的快照中查找对应容器，并尝试获取该容器中 `key` 对应字段的初始值。
-    /// 如果该容器尚未初始化初始值，则会延迟初始化一次（通过反射等方式）。
+    /// 查找指定解码路径下容器中某个字段的初始值
+    /// - 根据codingPath查找匹配的快照
+    /// - 延迟初始化：仅在首次访问时通过Mirror反射生成初始值
+    /// - 支持属性包装器场景（底层存储名是"_" + 属性名）
     func initialValueIfPresent<T>(forKey key: CodingKey?, codingPath: [CodingKey]) -> T? {
                 
         guard let key = key else { return nil }
-        
+
         // 查找匹配当前路径的快照
         guard let snapshot = findSnapShot(with: codingPath) else { return nil }
 
-        // Lazy initialization: Generate initial values via reflection only when first accessed,
-        // using the recorded objectType to optimize parsing performance
+        // 延迟初始化优化：仅在首次访问时通过Mirror反射生成初始值
         if snapshot.initialValues.isEmpty {
             populateInitialValues(snapshot: snapshot)
         }
-        
+
         guard let cacheValue = snapshot.initialValues[key.stringValue] else {
-            // Handle @propertyWrapper cases (prefixed with underscore)
+            // 处理属性包装器场景（底层存储名是"_" + 属性名）
             return handlePropertyWrapperCases(for: key, snapshot: snapshot)
         }
-        
+
         if let value = cacheValue as? T {
             return value
         } else if let caseValue = cacheValue as? any SmartCaseDefaultable {
             return caseValue.rawValue as? T
         }
-        
+
         return nil
     }
-    
+
     func initialValue<T>(forKey key: CodingKey?, codingPath: [CodingKey]) throws -> T {
         guard let value: T = initialValueIfPresent(forKey: key, codingPath: codingPath) else {
             return try Patcher<T>.defaultForType()
@@ -104,29 +101,21 @@ extension DecodingCache {
 
 // MARK: - 获取属性对应的值转换器
 extension DecodingCache {
-    
-    /// 根据属性 key 和其所在容器路径，查找对应的值转换器（SmartValueTransformer）
-    ///
-    /// - Parameters:
-    ///   - key: 当前正在解码的属性名（CodingKey），即字段名。可能为 `nil`，表示缺失或无法识别的字段。
-    ///   - containerPath: 当前属性所在容器的完整路径（不含当前 key）。
-    ///
-    /// - Returns: 匹配到的 `SmartValueTransformer`，如果未找到则返回 `nil`。
-    ///
-    /// - Note:
-    ///   - 此方法依赖于容器路径 `codingPath` 查找快照（snapshot），快照中包含该容器注册的所有转换器列表。
-    ///   - 若 key 为 `nil` 或找不到快照，或快照中未注册转换器，均返回 `nil`。
-    ///   - 匹配逻辑基于 key 的 `stringValue`。
+
+    /// 根据属性key和容器路径查找值转换器（SmartValueTransformer）
+    /// - 依赖快照中缓存的transformers列表（来自mappingForValue()）
+    /// - 容器路径匹配（codingPath）
+    /// - 匹配逻辑：基于key.stringValue查找
     func valueTransformer(for key: CodingKey?, in containerPath: [CodingKey]) -> SmartValueTransformer? {
         guard let lastKey = key else { return nil }
-        
+
         guard let snapshot = findSnapShot(with: containerPath) else { return nil }
-        
-        // Initialize transformers only once
+
+        // 转换器仅初始化一次（性能优化）
         if snapshot.transformers?.isEmpty ?? true {
             return nil
         }
-        
+
         let transformer = snapshot.transformers?.first(where: {
             $0.location.stringValue == lastKey.stringValue
         })
@@ -135,20 +124,20 @@ extension DecodingCache {
 }
 
 extension DecodingCache {
-    
-    
-    /// Handles property wrapper cases (properties prefixed with underscore)
+
+
+    /// 处理属性包装器场景（底层存储名是"_" + 属性名）
     private func handlePropertyWrapperCases<T>(for key: CodingKey, snapshot: DecodingSnapshot) -> T? {
         if let cached = snapshot.initialValues["_" + key.stringValue] {
             return extractWrappedValue(from: cached)
         }
-        
+
         return snapshots.reversed().lazy.compactMap {
             $0.initialValues["_" + key.stringValue]
         }.first.flatMap(extractWrappedValue)
     }
-    
-    /// Extracts wrapped value from potential property wrapper types
+
+    /// 从属性包装器类型中提取wrappedValue
     private func extractWrappedValue<T>(from value: Any) -> T? {
         if let wrapper = value as? SmartIgnored<T> {
             return wrapper.wrappedValue
@@ -159,11 +148,12 @@ extension DecodingCache {
         }
         return nil
     }
-    
+
+    /// 通过Mirror反射捕获初始值（延迟初始化）
     private func populateInitialValues(snapshot: DecodingSnapshot) {
         guard let type = snapshot.objectType else { return }
-                
-        // Recursively captures initial values from a type and its superclasses
+
+        // 递归捕获类型及其父类的初始值
         func captureInitialValues(from mirror: Mirror) {
             mirror.children.forEach { child in
                 if let key = child.label {
@@ -174,7 +164,7 @@ extension DecodingCache {
                 captureInitialValues(from: superclassMirror)
             }
         }
-        
+
         let mirror = Mirror(reflecting: type.init())
         captureInitialValues(from: mirror)
     }
@@ -182,20 +172,19 @@ extension DecodingCache {
 
 
 
-/// Snapshot of decoding state for a particular model
+/// 解码快照 - 记录单个模型的解码状态
 class DecodingSnapshot: Snapshot {
-    
+
     typealias ObjectType = SmartDecodable.Type
-    
+
     var objectType: (any SmartDecodable.Type)?
-    
+
     var codingPath: [any CodingKey] = []
-    
+
     lazy var transformers: [SmartValueTransformer]? = {
         objectType?.mappingForValue()
     }()
-    
-    /// Dictionary storing initial values of properties
-    /// Key: Property name, Value: Initial value
+
+    /// 属性初始值字典（延迟初始化）
     var initialValues: [String : Any] = [:]
 }
